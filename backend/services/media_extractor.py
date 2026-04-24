@@ -119,7 +119,8 @@ async def analyze_url(url: str) -> AnalyzeResponse:
 
     platform_info = PLATFORM_INFO.get(platform, {})
     
-    ydl_opts = {
+    # Base options
+    base_opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
@@ -131,17 +132,39 @@ async def analyze_url(url: str) -> AnalyzeResponse:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         },
-        "extractor_args": {
-            "youtube": ["player_client=web"],
-        },
     }
+    
+    # Add cookies file if configured
+    cookies_file = os.getenv("COOKIES_FILE")
+    if cookies_file and os.path.exists(cookies_file):
+        base_opts["cookiefile"] = cookies_file
 
-    try:
-        loop = asyncio.get_event_loop()
-        info = await loop.run_in_executor(None, lambda: _extract_info(url, ydl_opts))
-    except Exception as e:
-        logger.error(f"yt-dlp extraction failed for {url}: {e}")
-        raise ValueError(f"Could not analyze this URL: {str(e)}")
+    # For YouTube, try multiple player clients as fallback
+    if platform == Platform.YOUTUBE:
+        player_clients = ["mweb", "ios", "tv_embedded", "web"]
+    else:
+        player_clients = [None]
+
+    last_error = None
+    info = None
+    
+    for client in player_clients:
+        ydl_opts = {**base_opts}
+        if client:
+            ydl_opts["extractor_args"] = {"youtube": [f"player_client={client}"]}
+        
+        try:
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(None, lambda opts=ydl_opts: _extract_info(url, opts))
+            break  # Success — stop trying
+        except Exception as e:
+            last_error = e
+            logger.warning(f"yt-dlp client '{client}' failed for {url}: {e}")
+            continue
+    
+    if info is None:
+        logger.error(f"All yt-dlp attempts failed for {url}")
+        raise ValueError(f"Could not analyze this URL. The video may be private or require login.")
 
     title = info.get("title", "Untitled")
     thumbnail = info.get("thumbnail")
