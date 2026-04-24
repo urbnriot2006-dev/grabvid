@@ -17,9 +17,13 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.grabvid.app",
       "infoPlist": {
-        "NSPhotoLibraryAddUsageDescription": "GrabVid needs access to save downloaded media to your Photos library.",
-        "NSPhotoLibraryUsageDescription": "GrabVid needs access to save downloaded media to your Photos library.",
-        "ITSAppUsesNonExemptEncryption": false
+        "NSPhotoLibraryAddUsageDescription": "GrabVid saves downloaded videos to your photo library.",
+        "NSPhotoLibraryUsageDescription": "GrabVid needs photo library access to save media.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["fetch"],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {

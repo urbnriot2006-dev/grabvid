@@ -5,6 +5,7 @@
  */
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
+import Constants from 'expo-constants';
 import * as Sharing from 'expo-sharing';
 import { Platform, Alert } from 'react-native';
 import { MediaType } from '../constants';
@@ -23,8 +24,9 @@ export async function saveToDevice(
     throw new Error('Downloaded file not found.');
   }
 
-  // Try saving to media library first (works in production builds)
-  if (mediaType === 'video' || mediaType === 'image') {
+  // In Expo Go we cannot reliably write to the Media Library. Detect that and skip.
+  const isExpoGo = Constants.appOwnership === 'expo';
+  if (!isExpoGo && (mediaType === 'video' || mediaType === 'image')) {
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status === 'granted') {
@@ -46,6 +48,9 @@ export async function saveToDevice(
     } catch (err) {
       console.warn('MediaLibrary save failed:', err);
     }
+  } else if (isExpoGo) {
+    // Notify developer that a production build is required for full MediaLibrary access
+    console.warn('Expo Go cannot write to Media Library – fallback to share sheet. Build a development or production binary to enable full saving.');
   }
 
   // Fallback: open share sheet so user can save manually

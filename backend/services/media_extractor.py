@@ -289,6 +289,11 @@ async def download_media(url: str, format_id: str) -> tuple[str, str, str]:
     if cookies_file and os.path.exists(cookies_file):
         ydl_opts["cookiefile"] = cookies_file
 
+    # Add a Referer header – many platforms (Instagram, TikTok, Snapchat) require it
+    ydl_opts.setdefault('http_headers', {})
+    ydl_opts['http_headers']['Referer'] = url
+    
+    # Proceed with download as before
     try:
         loop = asyncio.get_event_loop()
         info = await loop.run_in_executor(None, lambda: _download_with_ytdlp(url, ydl_opts))

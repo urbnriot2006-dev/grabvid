@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from models.schemas import DownloadRequest, ErrorResponse
 from services.media_extractor import download_media
+from services.platform_detector import detect_platform
 
 logger = logging.getLogger(__name__)
 
@@ -58,24 +59,29 @@ async def _do_download(url: str, format_id: str):
     # Ensure URL has a protocol
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    # Detect platform for richer error info
+    platform = detect_platform(url)
     
     try:
         file_path, filename, content_type = await download_media(url, format_id)
-    except ValueError as e:
-        logger.warning(f"Download failed for {url} format {format_id}: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "download_failed", "message": str(e)},
-        )
     except Exception as e:
-        logger.error(f"Unexpected download error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "server_error",
-                "message": "Download failed. Please try again later.",
-            },
-        )
+        # First attempt failed – try generic "best" as a fallback
+        logger.warning(f"Initial download attempt failed for {url} with format {format_id}: {e}. Retrying with generic best format.")
+        try:
+            file_path, filename, content_type = await download_media(url, "best")
+        except Exception as e2:
+            # Still failed – return a clear error to the client, include platform info
+            logger.error(f"Fallback download also failed: {e2}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "download_failed",
+                    "message": str(e2),
+                    "platform": platform.value,
+                },
+            )
+    # If we get here, we have a valid file_path
+
     
     if not os.path.exists(file_path):
         raise HTTPException(
@@ -106,5 +112,8 @@ async def _do_download(url: str, format_id: str):
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(file_size),
             "X-File-Name": filename,
+            "Accept-Ranges": "bytes",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
         },
     )

@@ -34,9 +34,9 @@ import {
   AppState,
   detectPlatform,
 } from '../../constants';
-import { analyzeURL, downloadMedia } from '../../services/api';
-import { saveToDevice } from '../../services/fileSaver';
+import { analyzeURL } from '../../services/api';
 import { addDownloadRecord } from '../../services/storage';
+import DownloadManager from '../../services/DownloadManager';
 
 // ─── Responsive Helpers ─────────────────────────────────────
 type Breakpoint = 'phone' | 'phoneLg' | 'tablet' | 'tabletLg';
@@ -150,50 +150,49 @@ export default function DownloadScreen() {
     setDownloadProgress(0);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    try {
-      // Step 1: Download the file
-      const filePath = await downloadMedia(urlText, selectedFormat.format_id, (progress) => {
-        setDownloadProgress(progress);
-      });
+    // Use DownloadManager (react-native-blob-util + CameraRoll)
+    await DownloadManager.downloadVideo(
+      urlText,
+      selectedFormat.format_id,
+      // onProgress
+      (progress) => {
+        setDownloadProgress(progress.percent / 100);
+      },
+      // onComplete
+      async (result) => {
+        if (result.success) {
+          // Save to history
+          try {
+            await addDownloadRecord({
+              id: Date.now().toString(),
+              url: urlText,
+              title: analyzeResult?.title || 'Download',
+              platform: analyzeResult?.platform || 'unknown',
+              platform_color: analyzeResult?.platform_color || '#636366',
+              format_label: selectedFormat!.label,
+              format_type: selectedFormat!.type,
+              file_size: selectedFormat!.estimated_size,
+              download_date: Date.now(),
+              local_path: result.path || null,
+            });
+          } catch (historyErr) {
+            console.warn('Failed to save to history:', historyErr);
+          }
 
-      // Step 2: Save to history FIRST (this should always work)
-      try {
-        await addDownloadRecord({
-          id: Date.now().toString(),
-          url: urlText,
-          title: analyzeResult?.title || 'Download',
-          platform: analyzeResult?.platform || 'unknown',
-          platform_color: analyzeResult?.platform_color || '#636366',
-          format_label: selectedFormat.label,
-          format_type: selectedFormat.type,
-          file_size: selectedFormat.estimated_size,
-          download_date: Date.now(),
-          local_path: filePath,
-        });
-      } catch (historyErr) {
-        console.warn('Failed to save to history:', historyErr);
-      }
+          setAppState('completed');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // Step 3: Try to save to gallery/share (may fail in Expo Go)
-      try {
-        await saveToDevice(filePath, selectedFormat.type);
-      } catch (saveErr) {
-        console.warn('Gallery save failed:', saveErr);
-        // Don't block — file is still downloaded and in history
-      }
-
-      setAppState('completed');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-      // Auto-navigate to History tab after a brief moment
-      setTimeout(() => {
-        router.push('/(tabs)/history');
-      }, 1500);
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Download failed');
-      setAppState('error');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    }
+          // Auto-navigate to History tab after a brief moment
+          setTimeout(() => {
+            router.push('/(tabs)/history');
+          }, 1500);
+        } else {
+          setErrorMessage(result.error || 'Download failed');
+          setAppState('error');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        }
+      },
+    );
   };
 
   const handleReset = () => {
