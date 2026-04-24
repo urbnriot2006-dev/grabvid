@@ -11,6 +11,7 @@ import {
   ScrollView,
   StyleSheet,
   Linking,
+  Alert,
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -125,7 +126,7 @@ export default function SettingsScreen() {
         <View style={styles.divider} />
         <TouchableOpacity
           style={styles.settingRow}
-          onPress={() => Linking.openURL('https://grabvid.app/privacy')}
+          onPress={() => Linking.openURL('https://grabvid.app/privacy').catch(() => Alert.alert('Coming Soon', 'Privacy Policy page is not available yet.'))}
           activeOpacity={0.7}
         >
           <Text style={styles.settingText}>Privacy Policy</Text>
@@ -134,7 +135,7 @@ export default function SettingsScreen() {
         <View style={styles.divider} />
         <TouchableOpacity
           style={styles.settingRow}
-          onPress={() => Linking.openURL('https://grabvid.app/terms')}
+          onPress={() => Linking.openURL('https://grabvid.app/terms').catch(() => Alert.alert('Coming Soon', 'Terms of Service page is not available yet.'))}
           activeOpacity={0.7}
         >
           <Text style={styles.settingText}>Terms of Service</Text>

@@ -36,7 +36,10 @@ export async function analyzeURL(url: string): Promise<AnalyzeResponse> {
     return (await res.json()) as AnalyzeResponse;
   } catch (err: any) {
     if (err.name === 'AbortError') {
-      throw new Error('Request timed out. Please check your connection and try again.');
+      throw new Error('Server took too long to respond. Render might be starting up—please try again in a few seconds.');
+    }
+    if (err.message === 'Network request failed') {
+      throw new Error('Network error. Please check your internet connection or the server URL.');
     }
     throw err;
   } finally {
@@ -45,7 +48,8 @@ export async function analyzeURL(url: string): Promise<AnalyzeResponse> {
 }
 
 /**
- * Download media — streams file to local filesystem with progress
+ * Download media — uses expo-file-system for native download with progress
+ * Uses GET endpoint with query params (compatible with createDownloadResumable)
  */
 export async function downloadMedia(
   url: string,
@@ -57,109 +61,63 @@ export async function downloadMedia(
     normalizedUrl = 'https://' + normalizedUrl;
   }
 
-  // We need to POST to the download endpoint but expo-file-system's
-  // createDownloadResumable only supports GET. So we use a two-step approach:
-  // 1. POST to get the download, and capture the response as a blob
-  // 2. Write to file system
+  // Build the GET download URL with query params
+  const downloadUrl = `${DOWNLOAD_URL}?url=${encodeURIComponent(normalizedUrl)}&format_id=${encodeURIComponent(formatId)}`;
 
-  const res = await fetch(DOWNLOAD_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: normalizedUrl, format_id: formatId }),
-  });
-
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => null);
-    throw new Error(errBody?.detail?.message || `Download failed (${res.status})`);
-  }
-
-  // Get filename from headers
-  const filename = res.headers.get('X-File-Name')
-    || extractFilename(res.headers.get('Content-Disposition'))
-    || `download_${Date.now()}.mp4`;
-
-  const contentLength = parseInt(res.headers.get('Content-Length') || '0', 10);
-
-  // Read as blob and write to file
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('Download stream unavailable');
-
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      chunks.push(value);
-      received += value.length;
-      if (contentLength > 0) {
-        onProgress(Math.min(received / contentLength, 1));
-      }
-    }
-  }
-
-  // Combine chunks into single array
-  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-  const fullArray = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    fullArray.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  // Convert to base64 and write to file
-  const base64 = uint8ArrayToBase64(fullArray);
+  // Generate a filename based on format
+  const ext = getExtension(formatId);
+  const filename = `grabvid_${Date.now()}.${ext}`;
   const filePath = FileSystem.documentDirectory + filename;
 
-  await FileSystem.writeAsStringAsync(filePath, base64, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-
-  onProgress(1);
-  return filePath;
-}
-
-/**
- * Alternative download using FileSystem.createDownloadResumable
- * (works for GET-based download endpoints)
- */
-export async function downloadMediaAlt(
-  downloadUrl: string,
-  onProgress: (progress: number) => void,
-): Promise<string> {
-  const filename = `download_${Date.now()}.mp4`;
-  const filePath = FileSystem.documentDirectory + filename;
-
+  // Use expo-file-system's createDownloadResumable for native progress tracking
   const downloadResumable = FileSystem.createDownloadResumable(
     downloadUrl,
     filePath,
     {},
     (downloadProgress) => {
-      const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
-      onProgress(Math.min(progress, 1));
+      if (downloadProgress.totalBytesExpectedToWrite > 0) {
+        const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
+        onProgress(Math.min(progress, 1));
+      }
     },
   );
 
-  const result = await downloadResumable.downloadAsync();
-  if (!result || !result.uri) throw new Error('Download failed');
+  try {
+    const result = await downloadResumable.downloadAsync();
+    if (!result || !result.uri) {
+      throw new Error('Download failed — no file was received.');
+    }
 
-  onProgress(1);
-  return result.uri;
+    // Check if we got an error response (JSON) instead of the actual file
+    if (result.headers && result.headers['content-type']?.includes('application/json')) {
+      const errorContent = await FileSystem.readAsStringAsync(result.uri);
+      await FileSystem.deleteAsync(result.uri, { idempotent: true });
+      try {
+        const errObj = JSON.parse(errorContent);
+        throw new Error(errObj?.detail?.message || errObj?.message || 'Download failed on server.');
+      } catch (parseErr: any) {
+        if (parseErr.message.includes('Download failed')) throw parseErr;
+        throw new Error('Download failed on server.');
+      }
+    }
+
+    onProgress(1);
+    return result.uri;
+  } catch (err: any) {
+    // Clean up partial file
+    await FileSystem.deleteAsync(filePath, { idempotent: true }).catch(() => {});
+    throw err;
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-function extractFilename(header: string | null): string | null {
-  if (!header) return null;
-  const match = header.match(/filename="?(.+?)"?$/);
-  return match ? match[1] : null;
-}
-
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
+function getExtension(formatId: string): string {
+  if (formatId.includes('mp4') || formatId.includes('video')) return 'mp4';
+  if (formatId.includes('mp3') || formatId === 'mp3_audio') return 'mp3';
+  if (formatId === 'wav') return 'wav';
+  if (formatId === 'flac') return 'flac';
+  if (formatId.includes('jpeg') || formatId.includes('jpg')) return 'jpg';
+  if (formatId === 'gif') return 'gif';
+  return 'mp4';
 }

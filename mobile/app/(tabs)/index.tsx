@@ -291,7 +291,7 @@ export default function DownloadScreen() {
                 onPress={handleDownload}
                 activeOpacity={0.8}
               >
-                <Ionicons name="arrow-down-to-line" size={20} color={Colors.black} />
+                <Ionicons name="download-outline" size={20} color={Colors.black} />
                 <Text style={styles.downloadButtonText}>Download</Text>
               </TouchableOpacity>
             )}

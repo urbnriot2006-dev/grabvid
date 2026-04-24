@@ -118,9 +118,7 @@ export interface DownloadRecord {
 // ─── API Config ──────────────────────────────────────────────
 export const API_CONFIG = {
   // Change this to your deployed backend URL
-  baseURL: 'http://10.0.2.2:8000', // Android emulator localhost
-  // baseURL: 'http://localhost:8000', // iOS simulator
-  // baseURL: 'https://your-server.com', // Production
-  timeout: 30000,
-  downloadTimeout: 300000,
+  baseURL: 'https://grabvid.onrender.com', // Production Render URL
+  timeout: 90000, // 90 seconds (Render cold start can take a while)
+  downloadTimeout: 600000, // 10 minutes
 };
