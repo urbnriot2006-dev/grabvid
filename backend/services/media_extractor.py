@@ -20,6 +20,44 @@ MAX_DOWNLOAD_SIZE = int(os.getenv("MAX_DOWNLOAD_SIZE", str(2 * 1024 * 1024 * 102
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))
 
 
+def _classify_error(error_msg: str) -> dict:
+    """
+    Classify a yt-dlp error into a structured error code + user-friendly message.
+    The mobile app maps these codes to localized strings.
+    """
+    msg = str(error_msg).lower()
+
+    if any(k in msg for k in ["private", "is private", "private video"]):
+        return {"code": "PRIVATE", "error": "This video is private. Only the owner can view it."}
+
+    if any(k in msg for k in ["login", "sign in", "authentication", "cookies", "login required"]):
+        return {"code": "LOGIN_REQUIRED", "error": "This content requires login. Try a different video."}
+
+    if any(k in msg for k in ["age", "age-restricted", "confirm your age"]):
+        return {"code": "AGE_RESTRICTED", "error": "Age-restricted content. Server cookies may be needed."}
+
+    if any(k in msg for k in ["geo", "not available in your country", "geo restriction", "blocked in your"]):
+        return {"code": "GEO_BLOCKED", "error": "This video is not available in your region."}
+
+    if any(k in msg for k in ["copyright", "dmca", "taken down", "removed by"]):
+        return {"code": "COPYRIGHT", "error": "This video was removed due to copyright."}
+
+    if any(k in msg for k in ["not found", "404", "does not exist", "been deleted", "no video", "unavailable"]):
+        return {"code": "NOT_FOUND", "error": "Video not found. It may have been deleted."}
+
+    if any(k in msg for k in ["403", "forbidden", "blocked", "denied"]):
+        return {"code": "FORBIDDEN", "error": "Platform blocked the request. Try again later."}
+
+    if any(k in msg for k in ["429", "too many", "rate limit", "throttl"]):
+        return {"code": "RATE_LIMITED", "error": "Too many requests. Please wait a moment and try again."}
+
+    if any(k in msg for k in ["unsupported", "not supported", "no suitable"]):
+        return {"code": "UNSUPPORTED", "error": "This URL or format is not supported."}
+
+    # Generic fallback
+    return {"code": "UNKNOWN", "error": str(error_msg)}
+
+
 def _format_duration(seconds: Optional[int]) -> Optional[str]:
     """Convert seconds to HH:MM:SS or MM:SS format."""
     if seconds is None:

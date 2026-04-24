@@ -5,7 +5,7 @@ Accepts a URL, detects the platform, and returns available download formats.
 import logging
 from fastapi import APIRouter, HTTPException
 from models.schemas import AnalyzeRequest, AnalyzeResponse, ErrorResponse
-from services.media_extractor import analyze_url
+from services.media_extractor import analyze_url, _classify_error
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ async def analyze(request: AnalyzeRequest):
     if not url:
         raise HTTPException(
             status_code=400,
-            detail={"error": "invalid_url", "message": "Please provide a valid URL."},
+            detail={"error": "invalid_url", "code": "INVALID", "message": "Please provide a valid URL."},
         )
     
     # Ensure URL has a protocol
@@ -47,9 +47,10 @@ async def analyze(request: AnalyzeRequest):
         return result
     except ValueError as e:
         logger.warning(f"Analysis failed for URL: {url} - {e}")
+        classified = _classify_error(str(e))
         raise HTTPException(
             status_code=400,
-            detail={"error": "analysis_failed", "message": str(e)},
+            detail={"error": classified["error"], "code": classified["code"], "message": classified["error"]},
         )
     except Exception as e:
         logger.error(f"Unexpected error analyzing URL: {url} - {e}", exc_info=True)

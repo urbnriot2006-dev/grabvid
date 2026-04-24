@@ -9,7 +9,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from models.schemas import DownloadRequest, ErrorResponse
-from services.media_extractor import download_media
+from services.media_extractor import download_media, _classify_error
 from services.platform_detector import detect_platform
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ async def _do_download(url: str, format_id: str):
     if not url or not format_id:
         raise HTTPException(
             status_code=400,
-            detail={"error": "invalid_request", "message": "URL and format_id are required."},
+            detail={"error": "invalid_request", "code": "INVALID", "message": "URL and format_id are required."},
         )
     
     # Ensure URL has a protocol
@@ -70,13 +70,15 @@ async def _do_download(url: str, format_id: str):
         try:
             file_path, filename, content_type = await download_media(url, "best")
         except Exception as e2:
-            # Still failed – return a clear error to the client, include platform info
+            # Still failed – classify the error and return structured response
             logger.error(f"Fallback download also failed: {e2}")
+            classified = _classify_error(str(e2))
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "download_failed",
-                    "message": str(e2),
+                    "error": classified["error"],
+                    "code": classified["code"],
+                    "message": classified["error"],
                     "platform": platform.value,
                 },
             )

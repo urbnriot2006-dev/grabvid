@@ -7,6 +7,37 @@ import { API_CONFIG, AnalyzeResponse, FormatInfo } from '../constants';
 const ANALYZE_URL = `${API_CONFIG.baseURL}/api/v1/analyze`;
 const DOWNLOAD_URL = `${API_CONFIG.baseURL}/api/v1/download`;
 
+// Map backend error codes to user-friendly messages
+const ERROR_MESSAGES: Record<string, string> = {
+  PRIVATE: 'This video is private. Only the owner can view it.',
+  LOGIN_REQUIRED: 'This content requires login. Try a different video.',
+  AGE_RESTRICTED: 'Age-restricted content. Server cookies may be needed.',
+  GEO_BLOCKED: 'This video is not available in your region.',
+  COPYRIGHT: 'This video was removed due to copyright.',
+  NOT_FOUND: 'Video not found. It may have been deleted.',
+  FORBIDDEN: 'Platform blocked the request. Try again later.',
+  RATE_LIMITED: 'Too many requests. Please wait a moment and try again.',
+  UNSUPPORTED: 'This URL or format is not supported.',
+};
+
+/**
+ * Extract a user-friendly message from a backend error response
+ */
+function getErrorMessage(data: any, statusCode: number): string {
+  // Try structured error code first
+  const code = data?.detail?.code || data?.code;
+  if (code && ERROR_MESSAGES[code]) {
+    return ERROR_MESSAGES[code];
+  }
+  // Fall back to the server's message field
+  return (
+    data?.detail?.message ||
+    data?.detail?.error ||
+    data?.message ||
+    `Server error (${statusCode})`
+  );
+}
+
 /**
  * Analyze a URL — returns platform info + available formats
  */
@@ -29,8 +60,7 @@ export async function analyzeURL(url: string): Promise<AnalyzeResponse> {
 
     if (!res.ok) {
       const errBody = await res.json().catch(() => null);
-      const msg = errBody?.detail?.message || errBody?.message || `Server error (${res.status})`;
-      throw new Error(msg);
+      throw new Error(getErrorMessage(errBody, res.status));
     }
 
     return (await res.json()) as AnalyzeResponse;
@@ -95,9 +125,9 @@ export async function downloadMedia(
       await FileSystem.deleteAsync(result.uri, { idempotent: true });
       try {
         const errObj = JSON.parse(errorContent);
-        throw new Error(errObj?.detail?.message || errObj?.detail || 'Server returned an error.');
+        throw new Error(getErrorMessage(errObj, statusCode));
       } catch (parseErr: any) {
-        if (parseErr.message.includes('Server returned')) throw parseErr;
+        if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr;
         throw new Error(`Download failed with status ${statusCode}`);
       }
     }
@@ -112,9 +142,9 @@ export async function downloadMedia(
       // Try to parse as JSON error
       try {
         const errObj = JSON.parse(content);
-        throw new Error(errObj?.detail?.message || errObj?.detail || 'Download failed — server returned an error instead of the file.');
+        throw new Error(getErrorMessage(errObj, 400));
       } catch (parseErr: any) {
-        if (parseErr.message.includes('Download failed') || parseErr.message.includes('Server')) throw parseErr;
+        if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr;
         throw new Error('Download failed — received an invalid file (too small). The server may be busy, please try again.');
       }
     }
