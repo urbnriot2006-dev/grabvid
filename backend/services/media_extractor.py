@@ -284,6 +284,11 @@ async def download_media(url: str, format_id: str) -> tuple[str, str, str]:
     # Parse format_id to determine yt-dlp options
     ydl_opts = _build_download_opts(format_id, platform, temp_dir)
     
+    # Add cookies if available
+    cookies_file = os.getenv("COOKIES_FILE")
+    if cookies_file and os.path.exists(cookies_file):
+        ydl_opts["cookiefile"] = cookies_file
+
     try:
         loop = asyncio.get_event_loop()
         info = await loop.run_in_executor(None, lambda: _download_with_ytdlp(url, ydl_opts))
@@ -300,18 +305,19 @@ async def download_media(url: str, format_id: str) -> tuple[str, str, str]:
     
     # Find the actual downloaded file in temp_dir
     downloaded_file = None
+    # First try exact extension match
     for f in os.listdir(temp_dir):
-        if f.endswith(f".{ext}") or f.endswith(".mp4") or f.endswith(".mp3"):
+        if not f.startswith('.'):
             downloaded_file = os.path.join(temp_dir, f)
+            # Update extension based on actual file
+            actual_ext = f.rsplit('.', 1)[-1] if '.' in f else ext
+            if actual_ext != ext:
+                ext = actual_ext
+                _, content_type = _get_file_info_by_ext(actual_ext)
             break
     
     if not downloaded_file:
-        # Try to find any file
-        files = os.listdir(temp_dir)
-        if files:
-            downloaded_file = os.path.join(temp_dir, files[0])
-        else:
-            raise ValueError("Download completed but no file was produced.")
+        raise ValueError("Download completed but no file was produced.")
     
     filename = f"{safe_title}.{ext}"
     return downloaded_file, filename, content_type
@@ -334,36 +340,28 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         },
-        "extractor_args": {
-            "youtube": ["player_client=web"],
-        },
     }
+    
+    # Always use "best" as the ultimate fallback for all format strings
+    # Instagram, TikTok, Snapchat etc. don't have split video/audio streams
     
     if format_id.startswith("mp4_"):
         # Video formats
         if "1080" in format_id:
-            base_opts["format"] = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"
+            base_opts["format"] = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
         elif "720" in format_id:
-            base_opts["format"] = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
+            base_opts["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
         elif "480" in format_id:
-            base_opts["format"] = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
-        elif "hd" in format_id:
-            base_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            base_opts["format"] = "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
         elif "sd" in format_id:
-            base_opts["format"] = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
-        elif "no_watermark" in format_id:
-            base_opts["format"] = "best[ext=mp4]/best"
-        elif "watermark" in format_id:
-            base_opts["format"] = "best[ext=mp4]/best"
-        elif "video" in format_id:
-            base_opts["format"] = "best[ext=mp4]/best"
+            base_opts["format"] = "worst[ext=mp4]/worst/best"
         else:
-            base_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            # hd, no_watermark, watermark, video, best — all grab best available
+            base_opts["format"] = "best[ext=mp4]/best"
         
         base_opts["merge_output_format"] = "mp4"
         
     elif format_id.startswith("mp3_") or format_id == "mp3_audio":
-        # Audio extraction to MP3
         base_opts["format"] = "bestaudio/best"
         base_opts["postprocessors"] = [{
             "key": "FFmpegExtractAudio",
@@ -388,7 +386,6 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
         }]
         
     elif format_id.startswith("jpeg_") or format_id == "gif":
-        # For images, we'll download the best quality
         base_opts["format"] = "best"
     
     else:
@@ -420,3 +417,21 @@ def _get_file_info(format_id: str) -> tuple[str, str]:
             return ext, content_type
     
     return "mp4", "video/mp4"
+
+
+def _get_file_info_by_ext(ext: str) -> tuple[str, str]:
+    """Get file extension and content type from actual file extension."""
+    ext_map = {
+        "mp4": ("mp4", "video/mp4"),
+        "webm": ("webm", "video/webm"),
+        "mkv": ("mkv", "video/x-matroska"),
+        "mp3": ("mp3", "audio/mpeg"),
+        "m4a": ("m4a", "audio/mp4"),
+        "wav": ("wav", "audio/wav"),
+        "flac": ("flac", "audio/flac"),
+        "jpg": ("jpg", "image/jpeg"),
+        "jpeg": ("jpeg", "image/jpeg"),
+        "png": ("png", "image/png"),
+        "gif": ("gif", "image/gif"),
+    }
+    return ext_map.get(ext.lower(), (ext, "application/octet-stream"))

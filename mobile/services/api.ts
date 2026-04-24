@@ -88,16 +88,34 @@ export async function downloadMedia(
       throw new Error('Download failed — no file was received.');
     }
 
-    // Check if we got an error response (JSON) instead of the actual file
-    if (result.headers && result.headers['content-type']?.includes('application/json')) {
-      const errorContent = await FileSystem.readAsStringAsync(result.uri);
+    // Check HTTP status code if available
+    const statusCode = result.status;
+    if (statusCode && statusCode >= 400) {
+      const errorContent = await FileSystem.readAsStringAsync(result.uri).catch(() => '');
       await FileSystem.deleteAsync(result.uri, { idempotent: true });
       try {
         const errObj = JSON.parse(errorContent);
-        throw new Error(errObj?.detail?.message || errObj?.message || 'Download failed on server.');
+        throw new Error(errObj?.detail?.message || errObj?.detail || 'Server returned an error.');
       } catch (parseErr: any) {
-        if (parseErr.message.includes('Download failed')) throw parseErr;
-        throw new Error('Download failed on server.');
+        if (parseErr.message.includes('Server returned')) throw parseErr;
+        throw new Error(`Download failed with status ${statusCode}`);
+      }
+    }
+
+    // Check file size — if tiny, it's likely an error response, not a real video
+    const fileInfo = await FileSystem.getInfoAsync(result.uri, { size: true });
+    if (fileInfo.exists && (fileInfo as any).size < 10000) {
+      // File under 10KB — probably a JSON error, not a real media file
+      const content = await FileSystem.readAsStringAsync(result.uri).catch(() => '');
+      await FileSystem.deleteAsync(result.uri, { idempotent: true });
+      
+      // Try to parse as JSON error
+      try {
+        const errObj = JSON.parse(content);
+        throw new Error(errObj?.detail?.message || errObj?.detail || 'Download failed — server returned an error instead of the file.');
+      } catch (parseErr: any) {
+        if (parseErr.message.includes('Download failed') || parseErr.message.includes('Server')) throw parseErr;
+        throw new Error('Download failed — received an invalid file (too small). The server may be busy, please try again.');
       }
     }
 

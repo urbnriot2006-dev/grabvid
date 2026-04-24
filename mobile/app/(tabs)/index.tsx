@@ -151,26 +151,36 @@ export default function DownloadScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
+      // Step 1: Download the file
       const filePath = await downloadMedia(urlText, selectedFormat.format_id, (progress) => {
         setDownloadProgress(progress);
       });
 
-      // Save to device
-      await saveToDevice(filePath, selectedFormat.type);
+      // Step 2: Save to history FIRST (this should always work)
+      try {
+        await addDownloadRecord({
+          id: Date.now().toString(),
+          url: urlText,
+          title: analyzeResult?.title || 'Download',
+          platform: analyzeResult?.platform || 'unknown',
+          platform_color: analyzeResult?.platform_color || '#636366',
+          format_label: selectedFormat.label,
+          format_type: selectedFormat.type,
+          file_size: selectedFormat.estimated_size,
+          download_date: Date.now(),
+          local_path: filePath,
+        });
+      } catch (historyErr) {
+        console.warn('Failed to save to history:', historyErr);
+      }
 
-      // Add to history
-      await addDownloadRecord({
-        id: Date.now().toString(),
-        url: urlText,
-        title: analyzeResult?.title || 'Download',
-        platform: analyzeResult?.platform || 'unknown',
-        platform_color: analyzeResult?.platform_color || '#636366',
-        format_label: selectedFormat.label,
-        format_type: selectedFormat.type,
-        file_size: selectedFormat.estimated_size,
-        download_date: Date.now(),
-        local_path: filePath,
-      });
+      // Step 3: Try to save to gallery/share (may fail in Expo Go)
+      try {
+        await saveToDevice(filePath, selectedFormat.type);
+      } catch (saveErr) {
+        console.warn('Gallery save failed:', saveErr);
+        // Don't block — file is still downloaded and in history
+      }
 
       setAppState('completed');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

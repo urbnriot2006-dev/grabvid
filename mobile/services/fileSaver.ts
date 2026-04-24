@@ -1,6 +1,7 @@
 /**
  * File saving service — saves downloaded files to device storage
- * Falls back to share sheet if media library access is restricted (Expo Go)
+ * In Expo Go: opens share sheet for manual gallery save
+ * In production build: saves directly to gallery
  */
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
@@ -9,74 +10,78 @@ import { Platform, Alert } from 'react-native';
 import { MediaType } from '../constants';
 
 /**
- * Save a downloaded file to the device's media library or share
+ * Save a downloaded file — always opens share sheet in dev,
+ * tries gallery first in production
  */
 export async function saveToDevice(
   filePath: string,
   mediaType: MediaType,
 ): Promise<string> {
-  if (mediaType === 'video' || mediaType === 'image') {
-    try {
-      return await saveToMediaLibrary(filePath);
-    } catch (err: any) {
-      // Media library save failed (common in Expo Go on Android)
-      // Fall back to share sheet so user can save manually
-      console.warn('Media library save failed, falling back to share:', err.message);
-      await shareFile(filePath);
-      return filePath;
-    }
-  } else {
-    // Audio files — open share sheet so user can save to Files
-    await shareFile(filePath);
-    return filePath;
-  }
-}
-
-/**
- * Save video/image to the device's photo library
- */
-async function saveToMediaLibrary(filePath: string): Promise<string> {
-  const { status } = await MediaLibrary.requestPermissionsAsync();
-  if (status !== 'granted') {
-    throw new Error('Media library permission denied. Please enable it in Settings.');
-  }
-
-  // Ensure file exists
+  // Verify file exists
   const fileInfo = await FileSystem.getInfoAsync(filePath);
   if (!fileInfo.exists) {
     throw new Error('Downloaded file not found.');
   }
 
-  // Create or get the GrabVid album
-  const asset = await MediaLibrary.createAssetAsync(filePath);
-  
-  try {
-    let album = await MediaLibrary.getAlbumAsync('GrabVid');
-    if (!album) {
-      album = await MediaLibrary.createAlbumAsync('GrabVid', asset, false);
-    } else {
-      await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+  // Try saving to media library first (works in production builds)
+  if (mediaType === 'video' || mediaType === 'image') {
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status === 'granted') {
+        const asset = await MediaLibrary.createAssetAsync(filePath);
+        if (asset) {
+          try {
+            let album = await MediaLibrary.getAlbumAsync('GrabVid');
+            if (!album) {
+              await MediaLibrary.createAlbumAsync('GrabVid', asset, false);
+            } else {
+              await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+            }
+          } catch {
+            // Album creation may fail but asset is saved
+          }
+          return asset.uri;
+        }
+      }
+    } catch (err) {
+      console.warn('MediaLibrary save failed:', err);
     }
-  } catch {
-    // Album creation may fail in some environments but asset is still saved
   }
 
-  return asset.uri;
+  // Fallback: open share sheet so user can save manually
+  await openShareSheet(filePath);
+  return filePath;
 }
 
 /**
- * Share a file using the native share sheet
+ * Open native share sheet — user can tap "Save to Gallery" or share elsewhere
  */
-export async function shareFile(filePath: string): Promise<void> {
+async function openShareSheet(filePath: string): Promise<void> {
   const isAvailable = await Sharing.isAvailableAsync();
   if (!isAvailable) {
-    Alert.alert('Download Complete', 'File saved to app storage. Sharing is not available on this device.');
+    Alert.alert(
+      'Download Complete',
+      'File saved to app storage but sharing is not available on this device.',
+    );
     return;
   }
-  await Sharing.shareAsync(filePath, {
-    mimeType: getMimeType(filePath),
-    dialogTitle: 'Save your download',
-  });
+
+  try {
+    await Sharing.shareAsync(filePath, {
+      mimeType: getMimeType(filePath),
+      dialogTitle: 'Save your download',
+    });
+  } catch (err) {
+    // User cancelled the share sheet — that's OK
+    console.log('Share sheet dismissed');
+  }
+}
+
+/**
+ * Share a file using the native share sheet (public export)
+ */
+export async function shareFile(filePath: string): Promise<void> {
+  await openShareSheet(filePath);
 }
 
 /**
