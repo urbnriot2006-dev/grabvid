@@ -29,7 +29,7 @@ export const Colors = {
 export type PlatformId =
   | 'youtube' | 'instagram' | 'tiktok' | 'twitter'
   | 'facebook' | 'vimeo' | 'soundcloud' | 'pinterest'
-  | 'reddit' | 'twitch' | 'unknown';
+  | 'reddit' | 'twitch' | 'snapchat' | 'unknown';
 
 export interface PlatformInfo {
   id: PlatformId;
@@ -50,6 +50,7 @@ export const PLATFORMS: PlatformInfo[] = [
   { id: 'pinterest',  name: 'Pinterest',   color: '#E60023', icon: 'logo-pinterest',  domains: ['pinterest.com', 'pin.it'] },
   { id: 'reddit',     name: 'Reddit',      color: '#FF4500', icon: 'logo-reddit',     domains: ['reddit.com', 'redd.it'] },
   { id: 'twitch',     name: 'Twitch',      color: '#9146FF', icon: 'logo-twitch',     domains: ['twitch.tv'] },
+  { id: 'snapchat',   name: 'Snapchat',    color: '#FFFC00', icon: 'logo-snapchat',   domains: ['snapchat.com', 'story.snapchat.com', 't.snapchat.com'] },
 ];
 
 /**

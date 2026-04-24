@@ -61,6 +61,11 @@ PLATFORM_PATTERNS = {
         r"clips\.twitch\.tv",
         r"m\.twitch\.tv",
     ],
+    Platform.SNAPCHAT: [
+        r"(?:www\.)?snapchat\.com",
+        r"story\.snapchat\.com",
+        r"t\.snapchat\.com",
+    ],
 }
 
 

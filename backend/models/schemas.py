@@ -23,6 +23,7 @@ class Platform(str, Enum):
     PINTEREST = "pinterest"
     REDDIT = "reddit"
     TWITCH = "twitch"
+    SNAPCHAT = "snapchat"
     UNKNOWN = "unknown"
 
 
@@ -87,6 +88,12 @@ PLATFORM_INFO = {
         "color": "#9146FF",
         "icon": "tv.fill",
         "android_icon": "live_tv",
+    },
+    Platform.SNAPCHAT: {
+        "name": "Snapchat",
+        "color": "#FFFC00",
+        "icon": "camera.fill",
+        "android_icon": "photo_camera",
     },
 }
 

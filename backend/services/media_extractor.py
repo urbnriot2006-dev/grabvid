@@ -100,6 +100,13 @@ def _get_platform_formats(platform: Platform) -> list[dict]:
             {"format_id": "mp4_video", "label": "MP4 Video Pin", "type": MediaType.VIDEO, "quality": "HD",
              "ext": "mp4"},
         ]
+    elif platform == Platform.SNAPCHAT:
+        return [
+            {"format_id": "mp4_hd", "label": "MP4 HD", "type": MediaType.VIDEO, "quality": "HD", "ext": "mp4"},
+            {"format_id": "mp4_sd", "label": "MP4 SD", "type": MediaType.VIDEO, "quality": "SD", "ext": "mp4"},
+            {"format_id": "jpeg_original", "label": "JPEG Original", "type": MediaType.IMAGE,
+             "quality": "Original", "ext": "jpg"},
+        ]
     return [
         {"format_id": "mp4_best", "label": "MP4 Best Quality", "type": MediaType.VIDEO, "quality": "Best",
          "ext": "mp4"},
