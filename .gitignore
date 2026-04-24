@@ -1,0 +1,40 @@
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Xcode
+ios/build/
+ios/*.xcworkspace
+ios/xcuserdata/
+ios/DerivedData/
+ios/*.pbxuser
+ios/*.mode1v3
+ios/*.mode2v3
+ios/*.perspectivev3
+ios/*.xcuserstate
+ios/*.moved-aside
+ios/*.hmap
+ios/*.ipa
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml
+android/.idea/
+android/captures/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/venv/
+backend/.env
+
+# General
+*.log
+.env
+.env.local
+node_modules/

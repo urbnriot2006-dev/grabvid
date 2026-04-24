@@ -1,0 +1,374 @@
+"""
+Media extraction service using yt-dlp.
+Handles media analysis and download for all supported platforms.
+"""
+import os
+import re
+import asyncio
+import tempfile
+import logging
+from typing import Optional
+from models.schemas import (
+    Platform, MediaType, FormatInfo, AnalyzeResponse,
+    PLATFORM_INFO
+)
+from services.platform_detector import detect_platform
+
+logger = logging.getLogger(__name__)
+
+MAX_DOWNLOAD_SIZE = int(os.getenv("MAX_DOWNLOAD_SIZE", str(2 * 1024 * 1024 * 1024)))  # 2GB
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))
+
+
+def _format_duration(seconds: Optional[int]) -> Optional[str]:
+    """Convert seconds to HH:MM:SS or MM:SS format."""
+    if seconds is None:
+        return None
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _format_size(size_bytes: int) -> str:
+    """Convert bytes to human-readable string."""
+    if size_bytes <= 0:
+        return "Unknown"
+    units = ["B", "KB", "MB", "GB"]
+    unit_index = 0
+    size = float(size_bytes)
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    return f"{size:.1f} {units[unit_index]}"
+
+
+def _get_platform_formats(platform: Platform) -> list[dict]:
+    """
+    Get the expected format configurations for each platform.
+    These are the formats we try to extract or generate.
+    """
+    if platform in (Platform.YOUTUBE, Platform.VIMEO, Platform.TWITCH):
+        return [
+            {"format_id": "mp4_1080p", "label": "MP4 1080p", "type": MediaType.VIDEO, "quality": "1080p", "ext": "mp4",
+             "height": 1080},
+            {"format_id": "mp4_720p", "label": "MP4 720p", "type": MediaType.VIDEO, "quality": "720p", "ext": "mp4",
+             "height": 720},
+            {"format_id": "mp4_480p", "label": "MP4 480p", "type": MediaType.VIDEO, "quality": "480p", "ext": "mp4",
+             "height": 480},
+            {"format_id": "mp3_audio", "label": "MP3 Audio", "type": MediaType.AUDIO, "quality": "128kbps",
+             "ext": "mp3"},
+        ]
+    elif platform == Platform.TIKTOK:
+        return [
+            {"format_id": "mp4_no_watermark", "label": "MP4 (No Watermark)", "type": MediaType.VIDEO,
+             "quality": "HD", "ext": "mp4", "has_watermark": False},
+            {"format_id": "mp4_watermark", "label": "MP4 (With Watermark)", "type": MediaType.VIDEO,
+             "quality": "HD", "ext": "mp4", "has_watermark": True},
+            {"format_id": "mp3_audio", "label": "MP3 Audio", "type": MediaType.AUDIO, "quality": "128kbps",
+             "ext": "mp3"},
+        ]
+    elif platform in (Platform.INSTAGRAM, Platform.TWITTER, Platform.FACEBOOK, Platform.REDDIT):
+        return [
+            {"format_id": "mp4_hd", "label": "MP4 HD", "type": MediaType.VIDEO, "quality": "HD", "ext": "mp4"},
+            {"format_id": "mp4_sd", "label": "MP4 SD", "type": MediaType.VIDEO, "quality": "SD", "ext": "mp4"},
+            {"format_id": "jpeg_original", "label": "JPEG Original", "type": MediaType.IMAGE,
+             "quality": "Original", "ext": "jpg"},
+            {"format_id": "jpeg_compressed", "label": "JPEG Compressed", "type": MediaType.IMAGE,
+             "quality": "Compressed", "ext": "jpg"},
+            {"format_id": "gif", "label": "GIF", "type": MediaType.IMAGE, "quality": "Animated", "ext": "gif"},
+        ]
+    elif platform == Platform.SOUNDCLOUD:
+        return [
+            {"format_id": "mp3_320", "label": "MP3 320kbps", "type": MediaType.AUDIO, "quality": "320kbps",
+             "ext": "mp3"},
+            {"format_id": "mp3_128", "label": "MP3 128kbps", "type": MediaType.AUDIO, "quality": "128kbps",
+             "ext": "mp3"},
+            {"format_id": "wav", "label": "WAV Lossless", "type": MediaType.AUDIO, "quality": "Lossless",
+             "ext": "wav"},
+            {"format_id": "flac", "label": "FLAC Lossless", "type": MediaType.AUDIO, "quality": "Lossless",
+             "ext": "flac"},
+        ]
+    elif platform == Platform.PINTEREST:
+        return [
+            {"format_id": "jpeg_original", "label": "JPEG Original", "type": MediaType.IMAGE,
+             "quality": "Original", "ext": "jpg"},
+            {"format_id": "jpeg_compressed", "label": "JPEG Compressed", "type": MediaType.IMAGE,
+             "quality": "Compressed", "ext": "jpg"},
+            {"format_id": "mp4_video", "label": "MP4 Video Pin", "type": MediaType.VIDEO, "quality": "HD",
+             "ext": "mp4"},
+        ]
+    return [
+        {"format_id": "mp4_best", "label": "MP4 Best Quality", "type": MediaType.VIDEO, "quality": "Best",
+         "ext": "mp4"},
+    ]
+
+
+async def analyze_url(url: str) -> AnalyzeResponse:
+    """
+    Analyze a URL and return platform info with available formats.
+    Uses yt-dlp to extract metadata without downloading.
+    """
+    import yt_dlp
+
+    platform = detect_platform(url)
+    if platform == Platform.UNKNOWN:
+        raise ValueError("Unsupported platform. Please provide a URL from a supported platform.")
+
+    platform_info = PLATFORM_INFO.get(platform, {})
+    
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "no_color": True,
+        "socket_timeout": 30,
+    }
+
+    try:
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, lambda: _extract_info(url, ydl_opts))
+    except Exception as e:
+        logger.error(f"yt-dlp extraction failed for {url}: {e}")
+        raise ValueError(f"Could not analyze this URL: {str(e)}")
+
+    title = info.get("title", "Untitled")
+    thumbnail = info.get("thumbnail")
+    duration = info.get("duration")
+    author = info.get("uploader") or info.get("channel") or info.get("creator")
+
+    # Build available formats based on platform type and actual yt-dlp data
+    available_formats = _build_formats(platform, info)
+
+    return AnalyzeResponse(
+        platform=platform,
+        platform_name=platform_info.get("name", platform.value.title()),
+        platform_color=platform_info.get("color", "#FFFFFF"),
+        title=title,
+        thumbnail=thumbnail,
+        duration=int(duration) if duration else None,
+        duration_formatted=_format_duration(int(duration)) if duration else None,
+        author=author,
+        formats=available_formats,
+    )
+
+
+def _extract_info(url: str, opts: dict) -> dict:
+    """Synchronous yt-dlp info extraction."""
+    import yt_dlp
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
+
+
+def _build_formats(platform: Platform, info: dict) -> list[FormatInfo]:
+    """Build format list from platform config and actual yt-dlp data."""
+    platform_formats = _get_platform_formats(platform)
+    ydl_formats = info.get("formats", [])
+    
+    result = []
+    for pf in platform_formats:
+        # Try to estimate file size from yt-dlp format data
+        estimated_bytes = _estimate_size(pf, ydl_formats, info)
+        
+        format_info = FormatInfo(
+            format_id=pf["format_id"],
+            label=pf["label"],
+            type=pf["type"],
+            quality=pf["quality"],
+            extension=pf["ext"],
+            estimated_size=_format_size(estimated_bytes),
+            estimated_size_bytes=estimated_bytes,
+            has_watermark=pf.get("has_watermark"),
+        )
+        result.append(format_info)
+    
+    return result
+
+
+def _estimate_size(platform_format: dict, ydl_formats: list, info: dict) -> int:
+    """Estimate file size based on yt-dlp format data."""
+    target_height = platform_format.get("height")
+    media_type = platform_format["type"]
+    duration = info.get("duration", 0) or 0
+    
+    if media_type == MediaType.VIDEO and target_height:
+        # Find closest matching video format
+        for fmt in ydl_formats:
+            height = fmt.get("height", 0) or 0
+            if abs(height - target_height) <= 60:
+                filesize = fmt.get("filesize") or fmt.get("filesize_approx")
+                if filesize:
+                    return int(filesize)
+        
+        # Estimate based on bitrate and duration
+        bitrate_map = {1080: 4000, 720: 2500, 480: 1000}
+        bitrate_kbps = bitrate_map.get(target_height, 2000)
+        if duration > 0:
+            return int(bitrate_kbps * 1000 / 8 * duration)
+    
+    elif media_type == MediaType.AUDIO:
+        quality = platform_format.get("quality", "128kbps")
+        bitrate_match = re.search(r"(\d+)", quality)
+        bitrate_kbps = int(bitrate_match.group(1)) if bitrate_match else 128
+        if duration > 0:
+            return int(bitrate_kbps * 1000 / 8 * duration)
+        return 5 * 1024 * 1024  # Default 5MB
+    
+    elif media_type == MediaType.IMAGE:
+        if platform_format["quality"] == "Original":
+            return 2 * 1024 * 1024  # ~2MB
+        return 500 * 1024  # ~500KB
+    
+    # Fallback: check any filesize from yt-dlp
+    for fmt in ydl_formats:
+        filesize = fmt.get("filesize") or fmt.get("filesize_approx")
+        if filesize:
+            return int(filesize)
+    
+    return 10 * 1024 * 1024  # Default 10MB
+
+
+async def download_media(url: str, format_id: str) -> tuple[str, str, str]:
+    """
+    Download media in the specified format.
+    
+    Returns:
+        Tuple of (file_path, filename, content_type)
+    """
+    import yt_dlp
+
+    platform = detect_platform(url)
+    temp_dir = tempfile.mkdtemp(prefix="grabvid_")
+    
+    # Parse format_id to determine yt-dlp options
+    ydl_opts = _build_download_opts(format_id, platform, temp_dir)
+    
+    try:
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, lambda: _download_with_ytdlp(url, ydl_opts))
+    except Exception as e:
+        logger.error(f"Download failed for {url} with format {format_id}: {e}")
+        raise ValueError(f"Download failed: {str(e)}")
+    
+    # Find the downloaded file
+    title = info.get("title", "download")
+    safe_title = re.sub(r'[^\w\s-]', '', title).strip()[:100]
+    
+    # Determine extension and content type
+    ext, content_type = _get_file_info(format_id)
+    
+    # Find the actual downloaded file in temp_dir
+    downloaded_file = None
+    for f in os.listdir(temp_dir):
+        if f.endswith(f".{ext}") or f.endswith(".mp4") or f.endswith(".mp3"):
+            downloaded_file = os.path.join(temp_dir, f)
+            break
+    
+    if not downloaded_file:
+        # Try to find any file
+        files = os.listdir(temp_dir)
+        if files:
+            downloaded_file = os.path.join(temp_dir, files[0])
+        else:
+            raise ValueError("Download completed but no file was produced.")
+    
+    filename = f"{safe_title}.{ext}"
+    return downloaded_file, filename, content_type
+
+
+def _build_download_opts(format_id: str, platform: Platform, output_dir: str) -> dict:
+    """Build yt-dlp options based on format_id."""
+    output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
+    
+    base_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "no_color": True,
+        "outtmpl": output_template,
+        "socket_timeout": 30,
+        "max_filesize": MAX_DOWNLOAD_SIZE,
+    }
+    
+    if format_id.startswith("mp4_"):
+        # Video formats
+        if "1080" in format_id:
+            base_opts["format"] = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"
+        elif "720" in format_id:
+            base_opts["format"] = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
+        elif "480" in format_id:
+            base_opts["format"] = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
+        elif "hd" in format_id:
+            base_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        elif "sd" in format_id:
+            base_opts["format"] = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
+        elif "no_watermark" in format_id:
+            base_opts["format"] = "best[ext=mp4]/best"
+        elif "watermark" in format_id:
+            base_opts["format"] = "best[ext=mp4]/best"
+        elif "video" in format_id:
+            base_opts["format"] = "best[ext=mp4]/best"
+        else:
+            base_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        
+        base_opts["merge_output_format"] = "mp4"
+        
+    elif format_id.startswith("mp3_") or format_id == "mp3_audio":
+        # Audio extraction to MP3
+        base_opts["format"] = "bestaudio/best"
+        base_opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "320" if "320" in format_id else "128",
+        }]
+        
+    elif format_id == "wav":
+        base_opts["format"] = "bestaudio/best"
+        base_opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "wav",
+            "preferredquality": "0",
+        }]
+        
+    elif format_id == "flac":
+        base_opts["format"] = "bestaudio/best"
+        base_opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "flac",
+            "preferredquality": "0",
+        }]
+        
+    elif format_id.startswith("jpeg_") or format_id == "gif":
+        # For images, we'll download the best quality
+        base_opts["format"] = "best"
+    
+    else:
+        base_opts["format"] = "best"
+    
+    return base_opts
+
+
+def _download_with_ytdlp(url: str, opts: dict) -> dict:
+    """Synchronous yt-dlp download."""
+    import yt_dlp
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=True)
+
+
+def _get_file_info(format_id: str) -> tuple[str, str]:
+    """Get file extension and content type from format_id."""
+    format_map = {
+        "mp4": ("mp4", "video/mp4"),
+        "mp3": ("mp3", "audio/mpeg"),
+        "wav": ("wav", "audio/wav"),
+        "flac": ("flac", "audio/flac"),
+        "jpeg": ("jpg", "image/jpeg"),
+        "gif": ("gif", "image/gif"),
+    }
+    
+    for key, (ext, content_type) in format_map.items():
+        if key in format_id:
+            return ext, content_type
+    
+    return "mp4", "video/mp4"
