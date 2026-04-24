@@ -125,6 +125,15 @@ async def analyze_url(url: str) -> AnalyzeResponse:
         "skip_download": True,
         "no_color": True,
         "socket_timeout": 30,
+        "geo_bypass": True,
+        "age_limit": 100,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        "extractor_args": {
+            "youtube": ["player_client=web"],
+        },
     }
 
     try:
@@ -289,6 +298,15 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
         "outtmpl": output_template,
         "socket_timeout": 30,
         "max_filesize": MAX_DOWNLOAD_SIZE,
+        "geo_bypass": True,
+        "age_limit": 100,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        "extractor_args": {
+            "youtube": ["player_client=web"],
+        },
     }
     
     if format_id.startswith("mp4_"):

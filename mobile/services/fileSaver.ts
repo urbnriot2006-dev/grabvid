@@ -1,10 +1,11 @@
 /**
  * File saving service — saves downloaded files to device storage
+ * Falls back to share sheet if media library access is restricted (Expo Go)
  */
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
 import { MediaType } from '../constants';
 
 /**
@@ -15,7 +16,15 @@ export async function saveToDevice(
   mediaType: MediaType,
 ): Promise<string> {
   if (mediaType === 'video' || mediaType === 'image') {
-    return saveToMediaLibrary(filePath);
+    try {
+      return await saveToMediaLibrary(filePath);
+    } catch (err: any) {
+      // Media library save failed (common in Expo Go on Android)
+      // Fall back to share sheet so user can save manually
+      console.warn('Media library save failed, falling back to share:', err.message);
+      await shareFile(filePath);
+      return filePath;
+    }
   } else {
     // Audio files — open share sheet so user can save to Files
     await shareFile(filePath);
@@ -41,11 +50,15 @@ async function saveToMediaLibrary(filePath: string): Promise<string> {
   // Create or get the GrabVid album
   const asset = await MediaLibrary.createAssetAsync(filePath);
   
-  let album = await MediaLibrary.getAlbumAsync('GrabVid');
-  if (!album) {
-    album = await MediaLibrary.createAlbumAsync('GrabVid', asset, false);
-  } else {
-    await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+  try {
+    let album = await MediaLibrary.getAlbumAsync('GrabVid');
+    if (!album) {
+      album = await MediaLibrary.createAlbumAsync('GrabVid', asset, false);
+    } else {
+      await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+    }
+  } catch {
+    // Album creation may fail in some environments but asset is still saved
   }
 
   return asset.uri;
@@ -57,20 +70,28 @@ async function saveToMediaLibrary(filePath: string): Promise<string> {
 export async function shareFile(filePath: string): Promise<void> {
   const isAvailable = await Sharing.isAvailableAsync();
   if (!isAvailable) {
-    throw new Error('Sharing is not available on this device.');
+    Alert.alert('Download Complete', 'File saved to app storage. Sharing is not available on this device.');
+    return;
   }
-  await Sharing.shareAsync(filePath);
+  await Sharing.shareAsync(filePath, {
+    mimeType: getMimeType(filePath),
+    dialogTitle: 'Save your download',
+  });
 }
 
 /**
- * Get the file extension from a format type
+ * Get MIME type from file path
  */
-export function getExtensionForType(formatId: string): string {
-  if (formatId.includes('mp4') || formatId.includes('video')) return 'mp4';
-  if (formatId.includes('mp3') || formatId === 'mp3_audio') return 'mp3';
-  if (formatId === 'wav') return 'wav';
-  if (formatId === 'flac') return 'flac';
-  if (formatId.includes('jpeg') || formatId.includes('jpg')) return 'jpg';
-  if (formatId === 'gif') return 'gif';
-  return 'mp4';
+function getMimeType(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'mp4': return 'video/mp4';
+    case 'mp3': return 'audio/mpeg';
+    case 'wav': return 'audio/wav';
+    case 'flac': return 'audio/flac';
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'gif': return 'image/gif';
+    case 'png': return 'image/png';
+    default: return 'application/octet-stream';
+  }
 }

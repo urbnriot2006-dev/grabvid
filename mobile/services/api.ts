@@ -1,7 +1,7 @@
 /**
  * API Service — Communicates with the GrabVid FastAPI backend
  */
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { API_CONFIG, AnalyzeResponse, FormatInfo } from '../constants';
 
 const ANALYZE_URL = `${API_CONFIG.baseURL}/api/v1/analyze`;

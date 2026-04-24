@@ -23,6 +23,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter, useFocusEffect } from 'expo-router';
 
 import {
   Colors,
@@ -56,6 +57,7 @@ function useResponsive() {
 export default function DownloadScreen() {
   const insets = useSafeAreaInsets();
   const responsive = useResponsive();
+  const router = useRouter();
 
   // ─── State ────────────────────────────────────────────────
   const [urlText, setUrlText] = useState('');
@@ -65,6 +67,15 @@ export default function DownloadScreen() {
   const [selectedFormat, setSelectedFormat] = useState<FormatInfo | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
+
+  // Reset to idle when user comes back to this tab
+  useFocusEffect(
+    useCallback(() => {
+      if (appState === 'completed') {
+        handleReset();
+      }
+    }, [appState])
+  );
 
   // ─── Animations ───────────────────────────────────────────
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -163,6 +174,11 @@ export default function DownloadScreen() {
 
       setAppState('completed');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Auto-navigate to History tab after a brief moment
+      setTimeout(() => {
+        router.push('/(tabs)/history');
+      }, 1500);
     } catch (err: any) {
       setErrorMessage(err.message || 'Download failed');
       setAppState('error');
