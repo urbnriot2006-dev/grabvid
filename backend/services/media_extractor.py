@@ -342,8 +342,11 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
         },
     }
     
-    # Always use "best" as the ultimate fallback for all format strings
-    # Instagram, TikTok, Snapchat etc. don't have split video/audio streams
+    # Platform‑specific fallback – these services provide combined streams, so use the generic 'best'
+    if platform in (Platform.INSTAGRAM, Platform.SNAPCHAT, Platform.TIKTOK):
+        base_opts["format"] = "best"
+        return base_opts
+
     
     if format_id.startswith("mp4_"):
         # Video formats
