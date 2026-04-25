@@ -184,9 +184,9 @@ async def analyze_url(url: str) -> AnalyzeResponse:
     if cookies_file and os.path.exists(cookies_file):
         base_opts["cookiefile"] = cookies_file
 
-    # For YouTube, try multiple player clients as fallback
+    # For YouTube, try mobile/API clients to bypass datacenter IP blocks
     if platform == Platform.YOUTUBE:
-        player_clients = ["mweb", "ios", "tv_embedded", "web"]
+        player_clients = ["android", "ios", "mweb", "web"]
     else:
         player_clients = [None]
 
@@ -389,6 +389,9 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
     if platform in (Platform.INSTAGRAM, Platform.SNAPCHAT, Platform.TIKTOK):
         base_opts["format"] = "best"
         return base_opts
+
+    if platform == Platform.YOUTUBE:
+        base_opts["extractor_args"] = {"youtube": ["player_client=android"]}
 
     
     if format_id.startswith("mp4_"):
