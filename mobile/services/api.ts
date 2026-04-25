@@ -1,15 +1,45 @@
 /**
- * API Service — Communicates with Cobalt API to bypass custom backend
+ * API Service — Communicates with the GrabVid FastAPI backend
  */
 import * as FileSystem from 'expo-file-system/legacy';
-import { AnalyzeResponse, FormatInfo, detectPlatform } from '../constants';
+import { API_CONFIG, AnalyzeResponse, FormatInfo } from '../constants';
 
-const COBALT_API = 'https://api.cobalt.tools/api/json';
+const ANALYZE_URL = `${API_CONFIG.baseURL}/api/v1/analyze`;
+const DOWNLOAD_URL = `${API_CONFIG.baseURL}/api/v1/download`;
+
+// Map backend error codes to user-friendly messages
+const ERROR_MESSAGES: Record<string, string> = {
+  PRIVATE: 'This video is private. Only the owner can view it.',
+  LOGIN_REQUIRED: 'This content requires login. Try a different video.',
+  AGE_RESTRICTED: 'Age-restricted content. Server cookies may be needed.',
+  GEO_BLOCKED: 'This video is not available in your region.',
+  COPYRIGHT: 'This video was removed due to copyright.',
+  NOT_FOUND: 'Video not found. It may have been deleted.',
+  FORBIDDEN: 'Platform blocked the request. Try again later.',
+  RATE_LIMITED: 'Too many requests. Please wait a moment and try again.',
+  UNSUPPORTED: 'This URL or format is not supported.',
+};
 
 /**
- * Mock analyze URL — Since Cobalt doesn't provide a pre-download formats list
- * in the same way, we detect the platform locally and give the user
- * standard format choices (Video/Audio).
+ * Extract a user-friendly message from a backend error response
+ */
+function getErrorMessage(data: any, statusCode: number): string {
+  // Try structured error code first
+  const code = data?.detail?.code || data?.code;
+  if (code && ERROR_MESSAGES[code]) {
+    return ERROR_MESSAGES[code];
+  }
+  // Fall back to the server's message field
+  return (
+    data?.detail?.message ||
+    data?.detail?.error ||
+    data?.message ||
+    `Server error (${statusCode})`
+  );
+}
+
+/**
+ * Analyze a URL — returns platform info + available formats
  */
 export async function analyzeURL(url: string): Promise<AnalyzeResponse> {
   let normalizedUrl = url.trim();
@@ -17,39 +47,39 @@ export async function analyzeURL(url: string): Promise<AnalyzeResponse> {
     normalizedUrl = 'https://' + normalizedUrl;
   }
 
-  const platform = detectPlatform(normalizedUrl);
-  
-  // Fake the analyze response so the UI still works exactly as before
-  return {
-    platform: platform?.id || 'unknown',
-    platform_name: platform?.name || 'Unknown',
-    platform_color: platform?.color || '#636366',
-    title: 'Ready to Download', // Cobalt API doesn't give us a title before download
-    formats: [
-      {
-        format_id: 'video_best',
-        label: 'Best Quality Video',
-        type: 'video',
-        quality: 'Max',
-        extension: 'mp4',
-        estimated_size: 'Unknown',
-        estimated_size_bytes: 0
-      },
-      {
-        format_id: 'audio_only',
-        label: 'Audio Only',
-        type: 'audio',
-        quality: 'Best',
-        extension: 'mp3',
-        estimated_size: 'Unknown',
-        estimated_size_bytes: 0
-      }
-    ]
-  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_CONFIG.timeout);
+
+  try {
+    const res = await fetch(ANALYZE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: normalizedUrl }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      throw new Error(getErrorMessage(errBody, res.status));
+    }
+
+    return (await res.json()) as AnalyzeResponse;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error('Server took too long to respond. Render might be starting up—please try again in a few seconds.');
+    }
+    if (err.message === 'Network request failed') {
+      throw new Error('Network error. Please check your internet connection or the server URL.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**
- * Download media — Asks Cobalt for the direct link, then downloads it native via expo-file-system
+ * Download media — uses expo-file-system for native download with progress
+ * Uses GET endpoint with query params (compatible with createDownloadResumable)
  */
 export async function downloadMedia(
   url: string,
@@ -61,49 +91,17 @@ export async function downloadMedia(
     normalizedUrl = 'https://' + normalizedUrl;
   }
 
-  const isAudioOnly = formatId === 'audio_only';
+  // Build the GET download URL with query params
+  const downloadUrl = `${DOWNLOAD_URL}?url=${encodeURIComponent(normalizedUrl)}&format_id=${encodeURIComponent(formatId)}`;
 
-  // 1. Ask Cobalt for the direct media URL
-  const cobaltRes = await fetch(COBALT_API, {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      // Cobalt public instances sometimes require basic user agents to prevent simple scraping
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    },
-    body: JSON.stringify({
-      url: normalizedUrl,
-      vQuality: 'max',
-      isAudioOnly: isAudioOnly,
-      isNoTTWatermark: true, // Removes TikTok watermark!
-    })
-  });
-
-  const data = await cobaltRes.json();
-
-  if (data.status === 'error') {
-    throw new Error(data.text || 'Cobalt API failed to process this video.');
-  }
-
-  let directUrl = data.url;
-
-  // Handle 'picker' status (e.g. Instagram carousels with multiple items)
-  if (data.status === 'picker' && data.picker && data.picker.length > 0) {
-    directUrl = data.picker[0].url;
-  }
-
-  if (!directUrl) {
-    throw new Error('Failed to extract a valid download link from Cobalt.');
-  }
-
-  // 2. Download from the direct URL using expo-file-system
-  const ext = isAudioOnly ? 'mp3' : 'mp4';
+  // Generate a filename based on format
+  const ext = getExtension(formatId);
   const filename = `grabvid_${Date.now()}.${ext}`;
   const filePath = FileSystem.documentDirectory + filename;
 
+  // Use expo-file-system's createDownloadResumable for native progress tracking
   const downloadResumable = FileSystem.createDownloadResumable(
-    directUrl,
+    downloadUrl,
     filePath,
     {},
     (downloadProgress) => {
@@ -114,12 +112,60 @@ export async function downloadMedia(
     },
   );
 
-  const result = await downloadResumable.downloadAsync();
-  if (!result || !result.uri) {
-    throw new Error('Native download failed — no file was received.');
-  }
+  try {
+    const result = await downloadResumable.downloadAsync();
+    if (!result || !result.uri) {
+      throw new Error('Download failed — no file was received.');
+    }
 
-  // Ensure progress hits 100%
-  onProgress(1);
-  return result.uri;
+    // Check HTTP status code if available
+    const statusCode = result.status;
+    if (statusCode && statusCode >= 400) {
+      const errorContent = await FileSystem.readAsStringAsync(result.uri).catch(() => '');
+      await FileSystem.deleteAsync(result.uri, { idempotent: true });
+      try {
+        const errObj = JSON.parse(errorContent);
+        throw new Error(getErrorMessage(errObj, statusCode));
+      } catch (parseErr: any) {
+        if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr;
+        throw new Error(`Download failed with status ${statusCode}`);
+      }
+    }
+
+    // Check file size — if tiny, it's likely an error response, not a real video
+    const fileInfo = await FileSystem.getInfoAsync(result.uri, { size: true });
+    if (fileInfo.exists && (fileInfo as any).size < 10000) {
+      // File under 10KB — probably a JSON error, not a real media file
+      const content = await FileSystem.readAsStringAsync(result.uri).catch(() => '');
+      await FileSystem.deleteAsync(result.uri, { idempotent: true });
+      
+      // Try to parse as JSON error
+      try {
+        const errObj = JSON.parse(content);
+        throw new Error(getErrorMessage(errObj, 400));
+      } catch (parseErr: any) {
+        if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr;
+        throw new Error('Download failed — received an invalid file (too small). The server may be busy, please try again.');
+      }
+    }
+
+    onProgress(1);
+    return result.uri;
+  } catch (err: any) {
+    // Clean up partial file
+    await FileSystem.deleteAsync(filePath, { idempotent: true }).catch(() => {});
+    throw err;
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+function getExtension(formatId: string): string {
+  if (formatId.includes('mp4') || formatId.includes('video')) return 'mp4';
+  if (formatId.includes('mp3') || formatId === 'mp3_audio') return 'mp3';
+  if (formatId === 'wav') return 'wav';
+  if (formatId === 'flac') return 'flac';
+  if (formatId.includes('jpeg') || formatId.includes('jpg')) return 'jpg';
+  if (formatId === 'gif') return 'gif';
+  return 'mp4';
 }
