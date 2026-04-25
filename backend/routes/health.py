@@ -22,5 +22,8 @@ async def health_check():
         "version": "1.0.0",
         "cookies_loaded": cookies_loaded,
         "cookies_size_bytes": cookies_size,
-        "youtube_cookies_env_set": bool(os.getenv("YOUTUBE_COOKIES_BASE64")),
+        "env_youtube_cookies": bool(os.getenv("YOUTUBE_COOKIES_BASE64")),
+        "env_instagram_cookies": bool(os.getenv("INSTAGRAM_COOKIES_BASE64")),
+        "env_snapchat_cookies": bool(os.getenv("SNAPCHAT_COOKIES_BASE64")),
+        "env_tiktok_cookies": bool(os.getenv("TIKTOK_COOKIES_BASE64")),
     }
